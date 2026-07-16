@@ -2,9 +2,9 @@
 
 Switcher interactivo de **colores** y **tipografía** de kitty, con
 hot-reload sin reiniciar la terminal. Selección con flechas/fuzzy (`fzf`)
-y panel de preview en vivo (paleta de 16 colores / info de la fuente) para
-cada opción: ~169 temas de color incluidos + cualquier fuente monoespaciada
-que ya tengas instalada en el sistema.
+y panel de preview en vivo para cada opción: ~169 temas de color incluidos,
+cualquier fuente monoespaciada que ya tengas instalada, y un **creador de
+temas propios** que te arma una paleta entera a partir de un solo color.
 
 ## Instalar
 
@@ -14,11 +14,11 @@ Un solo comando, no hace falta clonar nada a mano:
 curl -fsSL https://raw.githubusercontent.com/im-zabandija/kitty-theme/main/install.sh | bash
 ```
 
-Requiere `kitty`, [`fzf`](https://github.com/junegunn/fzf) y `fontconfig`
-(`fc-list`, viene preinstalado en casi todas las distros) instalados
-(`apt install fzf fontconfig`, `brew install fzf`, `pacman -S fzf
-fontconfig`, etc.). El instalador es idempotente: se puede correr de nuevo
-sin romper nada.
+Requiere `kitty`, [`fzf`](https://github.com/junegunn/fzf), `fontconfig`
+(`fc-list`) y `awk` (los tres últimos vienen preinstalados en casi todas
+las distros) (`apt install fzf fontconfig`, `brew install fzf`, `pacman -S
+fzf fontconfig`, etc.). El instalador es idempotente: se puede correr de
+nuevo sin romper nada.
 
 Qué hace:
 - Copia el comando `theme` a `~/.local/bin/theme`.
@@ -37,10 +37,17 @@ Qué hace:
 theme
 ```
 
-El menú principal ofrece tres opciones:
+El menú principal ofrece cuatro opciones:
 - **🎨 Color · Fijo** — cualquier tema de la colección, con preview en vivo.
 - **🎨 Color · Dinámico** — si además tenés [DMS](https://github.com/AvengeMedia/DankMaterialShell)
   instalado, sigue el wallpaper.
+- **🖌️ Color · Propio** — creá tu propio tema: elegís base (oscuro/claro) y
+  un color semilla (de una lista con swatches de color, o tipeás cualquier
+  `#rrggbb`), y se genera una **paleta entera** (fondo, texto, cursor,
+  selección y los 16 colores ANSI) derivada de ese color. Se aplica en vivo
+  mientras la armás; podés pedir **otra variación**, cambiar la semilla o el
+  modo, y recién ahí guardarla con nombre. Queda como un tema más de tu
+  colección.
 - **🔤 Fuente** — cualquier familia monoespaciada instalada en tu sistema
   (detectada vía `fontconfig`, no hace falta que esté en el repo). El panel
   muestra las variantes disponibles (Regular/Bold/Italic/Bold Italic) y si
@@ -58,6 +65,12 @@ archivos que el comando `theme` reescribe:
   `include themes/<NOMBRE>.conf` (fijo).
 - `font-active.conf`: `font_family`/`bold_font`/`italic_font`/
   `bold_italic_font` apuntando a la familia elegida.
+
+El creador de temas propios deriva toda la paleta en **HSL**: cada color
+ANSI conserva su matiz semántico (rojo = error, verde = ok…) pero tintado
+hacia el matiz de tu semilla para que todo combine. La generación es
+determinística (misma semilla → misma paleta) y "Otra variación" aplica un
+jitter controlado. El tema guardado es un `.conf` normal de kitty.
 
 Después manda `pkill -SIGUSR1 -x kitty` para recargar en caliente.
 Idempotente y no destructivo: solo toca esos dos archivos.

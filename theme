@@ -2,6 +2,7 @@
 # theme — alterna en caliente el look de kitty:
 #   Color:  1) Dinámico -> danklinux/DMS (sigue el wallpaper)
 #           2) Fijo     -> un tema de ~/.config/kitty/themes/
+#           3) Propio   -> generá una paleta entera desde un color semilla
 #   Fuente: cualquier familia monoespaciada instalada en el sistema (fontconfig)
 # Selección interactiva con fzf: flechas para pasar uno por uno y un panel
 # de vista previa en vivo (paleta de color / info de tipografía) de cada opción.
@@ -12,6 +13,7 @@ KITTY_DIR="${THEME_KITTY_DIR:-$HOME/.config/kitty}"
 ACTIVE="$KITTY_DIR/theme-active.conf"
 FONT_ACTIVE="$KITTY_DIR/font-active.conf"
 THEMES_DIR="$KITTY_DIR/themes"
+DRAFT="$THEMES_DIR/.custom-draft.conf"
 SELF="$(readlink -f "$0")"
 
 # ─────────────────────── vista previa: color ──────────────────────────────
@@ -108,9 +110,132 @@ _font_preview() {
     printf '   se ve al aplicar, la ventana recarga en caliente)\n'
 }
 
+# ────────────────── generador de paleta desde un color semilla ─────────────
+# Deriva una paleta completa (bg/fg/cursor/selección + 16 colores ANSI) a
+# partir de un solo color en HSL: cada acento ANSI conserva su matiz
+# semántico (rojo=error, verde=ok…) pero tintado hacia el matiz de la semilla
+# para que todo combine. jitter=0 -> determinístico; jitter!=0 -> variación.
+# Portable: solo funciones POSIX de awk (sirve gawk y mawk).
+_gen_palette() {  # $1=hex semilla  $2=dark|light  $3=jitter(0=fijo)
+    awk -v seedhex="$1" -v mode="$2" -v jitter="$3" -f - <<'AWK'
+function hexdigit(c,   i) { i = index("0123456789abcdef", tolower(c)); return i - 1 }
+function hexval(h) { return hexdigit(substr(h,1,1))*16 + hexdigit(substr(h,2,1)) }
+function hue2rgb(p,q,t) {
+    if (t < 0) t += 1
+    if (t > 1) t -= 1
+    if (t < 1/6) return p + (q - p) * 6 * t
+    if (t < 1/2) return q
+    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6
+    return p
+}
+function clamp(v,lo,hi) { if (v<lo) return lo; if (v>hi) return hi; return v }
+function hsl2hex(h,s,l,   hh,ss,ll,q,p,r,g,b,R,G,B) {
+    hh = ((h % 360) + 360) % 360 / 360
+    ss = clamp(s,0,100) / 100
+    ll = clamp(l,0,100) / 100
+    if (ss == 0) { r=g=b=ll }
+    else {
+        q = (ll < 0.5) ? ll*(1+ss) : ll+ss-ll*ss
+        p = 2*ll - q
+        r = hue2rgb(p,q,hh+1/3)
+        g = hue2rgb(p,q,hh)
+        b = hue2rgb(p,q,hh-1/3)
+    }
+    R = int(r*255+0.5); G = int(g*255+0.5); B = int(b*255+0.5)
+    return sprintf("#%02x%02x%02x", R, G, B)
+}
+function rgb2hsl(R,G,B,   r,g,b,mx,mn,d) {
+    r=R/255; g=G/255; b=B/255
+    mx = (r>g)? (r>b?r:b) : (g>b?g:b)
+    mn = (r<g)? (r<b?r:b) : (g<b?g:b)
+    Lg = (mx+mn)/2
+    if (mx==mn) { Hg=0; Sg=0 }
+    else {
+        d = mx-mn
+        Sg = (Lg>0.5) ? d/(2-mx-mn) : d/(mx+mn)
+        if (mx==r) Hg = (g-b)/d + (g<b?6:0)
+        else if (mx==g) Hg = (b-r)/d + 2
+        else Hg = (r-g)/d + 4
+        Hg = Hg/6
+    }
+    Hg *= 360; Sg *= 100; Lg *= 100
+}
+function angdiff(a,b,   d) { d = ((a-b)%360+360)%360; if (d>180) d-=360; return d }
+BEGIN {
+    srand(jitter+0)
+    hex = seedhex; sub(/^#/,"",hex)
+    R = hexval(substr(hex,1,2)); G = hexval(substr(hex,3,2)); B = hexval(substr(hex,5,2))
+    rgb2hsl(R,G,B)
+    seedH = Hg; seedS = clamp(Sg,45,90)
+
+    jr = (jitter==0) ? 0 : (rand()-0.5)
+    tint   = 0.22 + jr*0.10        # cuánto del matiz semilla se filtra a cada acento
+    satmix = 0.55 + jr*0.15        # mezcla saturación semilla vs base
+
+    split("red green yellow blue magenta cyan", names, " ")
+    anchor["red"]=6; anchor["green"]=132; anchor["yellow"]=44
+    anchor["blue"]=221; anchor["magenta"]=288; anchor["cyan"]=187
+    idx["red"]=1; idx["green"]=2; idx["yellow"]=3
+    idx["blue"]=4; idx["magenta"]=5; idx["cyan"]=6
+
+    if (mode=="light") {
+        bgL=95; bgS=28; fgL=18; fgS=16
+        blackL=25; blackS=18; grayL=52; grayS=12
+        whiteL=82; whiteS=10; brightWL=98; brightWS=4
+        normL=42; brightL=33
+        selL=bgL-12
+    } else {
+        bgL=10; bgS=22; fgL=90; fgS=12
+        blackL=16; blackS=24; grayL=40; grayS=16
+        whiteL=76; whiteS=8; brightWL=95; brightWS=5
+        normL=60; brightL=70
+        selL=bgL+12
+    }
+
+    printf "background %s\n", hsl2hex(seedH, bgS, bgL)
+    printf "foreground %s\n", hsl2hex(seedH, fgS, fgL)
+    printf "cursor #%s\n", hex
+    printf "selection_background %s\n", hsl2hex(seedH, bgS+6, selL)
+    printf "selection_foreground %s\n", hsl2hex(seedH, fgS, fgL)
+
+    printf "color0 %s\n",  hsl2hex(seedH, blackS,  blackL)
+    printf "color8 %s\n",  hsl2hex(seedH, grayS,   grayL)
+    printf "color7 %s\n",  hsl2hex(seedH, whiteS,  whiteL)
+    printf "color15 %s\n", hsl2hex(seedH, brightWS, brightWL)
+
+    for (i=1;i<=6;i++) {
+        n = names[i]
+        h = anchor[n] + tint*angdiff(seedH, anchor[n])
+        s = satmix*seedS + (1-satmix)*68
+        printf "color%d %s\n", idx[n],   hsl2hex(h, s,                normL)
+        printf "color%d %s\n", idx[n]+8, hsl2hex(h, clamp(s+8,0,95),  brightL)
+    }
+}
+AWK
+}
+
+# ─────────────────── vista previa en vivo: tema propio ─────────────────────
+# Genera el draft desde el hex resaltado, lo aplica a tu kitty AL INSTANTE
+# (para que veas el tema completo en tu ventana real) y dibuja el swatch.
+# Uso interno vía `theme --custom-preview "<línea de acento>" <dark|light>`.
+_custom_preview() {
+    local line="$1" mode="${2:-dark}" hex
+    hex="$(printf '%s' "$line" | grep -oiE '#[0-9a-f]{6}' | tail -1)"
+    if [ -z "$hex" ]; then
+        printf '\n  ✍️  Elegí esta opción y vas a poder escribir\n'
+        printf '      cualquier color en formato #rrggbb.\n'
+        return
+    fi
+    _gen_palette "$hex" "$mode" 0 > "$DRAFT"
+    printf 'include themes/%s\n' "$(basename "$DRAFT")" > "$ACTIVE"
+    pkill -SIGUSR1 -x kitty 2>/dev/null || true
+    _swatch "$(basename "${DRAFT%.conf}")"
+}
+
 case "${1:-}" in
-    --swatch)       _swatch "${2:-}"; exit 0 ;;
-    --font-preview) _font_preview "${2:-}"; exit 0 ;;
+    --swatch)         _swatch "${2:-}"; exit 0 ;;
+    --font-preview)   _font_preview "${2:-}"; exit 0 ;;
+    --custom-preview) _custom_preview "${2:-}" "${3:-dark}"; exit 0 ;;
 esac
 
 # ──────────────────────────── prerequisitos ──────────────────────────────
@@ -124,6 +249,10 @@ if ! command -v fzf >/dev/null 2>&1; then
 fi
 if ! command -v fc-list >/dev/null 2>&1; then
     echo "✗ Falta 'fc-list' (paquete fontconfig). Instalalo y reintentá." >&2
+    exit 1
+fi
+if ! command -v awk >/dev/null 2>&1; then
+    echo "✗ Falta 'awk'. Instalalo y reintentá." >&2
     exit 1
 fi
 
@@ -192,6 +321,157 @@ pick_font() {  # imprime la familia elegida en stdout (vacío si se cancela)
         --preview-label=' info '
 }
 
+# ───────────────────── crear tema propio (paleta desde semilla) ────────────
+# Acentos sugeridos: cada línea trae su propio swatch de color renderizado
+# en el menú (fzf --ansi), + un ítem para tipear cualquier hex a mano.
+_accent_list() {
+    local a name hex r g b
+    # nombre|hex — semillas lindas y variadas
+    for a in \
+        "Coral|#ff6b6b"     "Mandarina|#ff9f43"   "Ámbar|#feca57" \
+        "Lima|#a8e063"      "Esmeralda|#26de81"   "Turquesa|#2bcbba" \
+        "Cielo|#54a0ff"     "Índigo|#4834d4"      "Cobalto|#3b82f6" \
+        "Violeta|#9b59b6"   "Lavanda|#a29bfe"     "Magenta|#e84393" \
+        "Rosa|#fd79a8"      "Vino|#c0392b"        "Óxido|#d35400" \
+        "Oliva|#7f8c8d"     "Menta|#55efc4"       "Acero|#576574" ; do
+        name="${a%%|*}"; hex="${a#*|}"
+        read -r r g b < <(_hex_rgb "$hex")
+        printf '\033[48;2;%d;%d;%dm      \033[0m  %-12s %s\n' "$r" "$g" "$b" "$name" "$hex"
+    done
+    printf '  ✍️  %-12s (ingresar un hex a mano)\n' "Otro…"
+}
+
+pick_accent() {  # $1=mode ; imprime hex, "__MANUAL__" o nada (cancela)
+    local mode="$1" sel
+    sel=$(_accent_list | fzf --ansi \
+        --height=90% --layout=reverse --border=rounded \
+        --prompt='semilla › ' \
+        --header='↑/↓ pasar una por una · Enter elegir · Esc cancelar · el tema se aplica en vivo mientras navegás' \
+        --header-first \
+        --preview="'$SELF' --custom-preview \"{}\" $mode" \
+        --preview-window='right,62%,border-left,wrap' \
+        --preview-label=' vista previa en vivo ')
+    [ -n "$sel" ] || return 0
+    if [[ $sel == *"ingresar un hex a mano"* ]]; then
+        printf '__MANUAL__'
+        return 0
+    fi
+    printf '%s' "$(printf '%s' "$sel" | grep -oiE '#[0-9a-f]{6}' | tail -1)"
+}
+
+_restore_active() {  # $1=había_active(1/0)  $2=contenido_previo
+    if [ "$1" = "1" ]; then
+        printf '%s\n' "$2" > "$ACTIVE"
+    else
+        rm -f "$ACTIVE"
+    fi
+}
+
+_apply_draft() {  # $1=hex $2=mode $3=jitter — genera draft, lo apunta y recarga
+    _gen_palette "$1" "$2" "$3" > "$DRAFT"
+    printf 'include themes/%s\n' "$(basename "$DRAFT")" > "$ACTIVE"
+    pkill -SIGUSR1 -x kitty 2>/dev/null || true
+}
+
+_read_manual_hex() {  # imprime hex válido o nada
+    local input
+    read -r -p "Color semilla en hex (#rrggbb, vacío cancela): " input
+    [ -n "$input" ] || return 0
+    if [[ ! $input =~ ^#[0-9A-Fa-f]{6}$ ]]; then
+        echo "✗ Formato inválido, tiene que ser #rrggbb." >&2
+        return 1
+    fi
+    printf '%s' "$input"
+}
+
+create_custom_theme() {
+    local orig_active="" had_active=0
+    if [ -f "$ACTIVE" ]; then orig_active="$(cat "$ACTIVE")"; had_active=1; fi
+
+    # 1) modo claro/oscuro
+    local MD='🌑 Oscuro' ML='☀️  Claro' mc
+    mc=$(printf '%s\n%s\n' "$MD" "$ML" | fzf \
+        --height=30% --layout=reverse --border=rounded \
+        --prompt='base › ' \
+        --header='🖌️  Crear tema propio · paso 1/2: ¿oscuro o claro?
+↑/↓ moverse · Enter elegir · Esc cancelar' --header-first)
+    [ -n "$mc" ] || { echo "Sin cambios."; return; }
+    local mode="dark"; [ "$mc" = "$ML" ] && mode="light"
+
+    # 2) semilla (con preview en vivo)
+    local seed_hex="" res
+    while :; do
+        res="$(pick_accent "$mode")"
+        if [ -z "$res" ]; then
+            _restore_active "$had_active" "$orig_active"; reload_kitty; echo "Sin cambios."; return
+        elif [ "$res" = "__MANUAL__" ]; then
+            local h; h="$(_read_manual_hex)" || continue
+            [ -n "$h" ] || { _restore_active "$had_active" "$orig_active"; reload_kitty; echo "Sin cambios."; return; }
+            seed_hex="$h"; _apply_draft "$seed_hex" "$mode" 0; break
+        else
+            seed_hex="$res"; break   # pick_accent ya dejó el draft aplicado por el preview
+        fi
+    done
+    # garantizar draft aplicado (por si venía de un preview previo)
+    _apply_draft "$seed_hex" "$mode" 0
+
+    # 3) ajustar / guardar
+    local jitter=0
+    local SAVE='✅ Guardar así' REGEN='🎲 Otra variación (misma semilla)'
+    local RESEED='🎨 Elegir otra semilla' REMODE='🌗 Cambiar oscuro/claro'
+    local DISCARD='❌ Descartar y volver' act name overwrite
+    while :; do
+        local cur; cur="$(sed -n 's/^cursor #*//p' "$DRAFT" | head -1)"
+        act=$(printf '%s\n%s\n%s\n%s\n%s\n' "$SAVE" "$REGEN" "$RESEED" "$REMODE" "$DISCARD" | fzf \
+            --height=45% --layout=reverse --border=rounded \
+            --prompt='tema propio › ' \
+            --header="🖌️  Ya aplicado a tu kitty — mirá la ventana · semilla #$cur · modo $mode
+↑/↓ moverse · Enter elegir · Esc = descartar" --header-first)
+        [ -n "$act" ] || act="$DISCARD"
+        case "$act" in
+            "$SAVE")
+                read -r -p "Nombre del tema: " name
+                name="$(printf '%s' "$name" | tr -cs 'A-Za-z0-9_ -' '_' | tr ' ' '_' | sed 's/^_*//; s/_*$//')"
+                [ -n "$name" ] || name="Custom-${seed_hex#\#}"
+                if [ -f "$THEMES_DIR/$name.conf" ]; then
+                    read -r -p "'$name' ya existe, ¿sobreescribir? [s/N]: " overwrite
+                    case "$overwrite" in [sS]*) ;; *) echo "No se guardó, elegí otro nombre."; continue ;; esac
+                fi
+                cp "$DRAFT" "$THEMES_DIR/$name.conf"
+                rm -f "$DRAFT"
+                set_fixed "$name"
+                echo "🎉 Tema '$name' guardado en $THEMES_DIR/$name.conf — ya está en tu colección."
+                return
+                ;;
+            "$REGEN")
+                jitter=$RANDOM
+                _apply_draft "$seed_hex" "$mode" "$jitter"
+                ;;
+            "$RESEED")
+                res="$(pick_accent "$mode")"
+                if [ "$res" = "__MANUAL__" ]; then
+                    local h; h="$(_read_manual_hex)" && [ -n "$h" ] && seed_hex="$h"
+                elif [ -n "$res" ]; then
+                    seed_hex="$res"
+                fi
+                jitter=0
+                _apply_draft "$seed_hex" "$mode" 0
+                ;;
+            "$REMODE")
+                [ "$mode" = "dark" ] && mode="light" || mode="dark"
+                _apply_draft "$seed_hex" "$mode" "$jitter"
+                ;;
+            "$DISCARD"|*)
+                rm -f "$DRAFT"
+                _restore_active "$had_active" "$orig_active"
+                reload_kitty
+                echo "Descartado, volví al tema anterior."
+                return
+                ;;
+        esac
+    done
+}
+
 # ──────────────────────────── estado actual ──────────────────────────────
 current_color="(desconocido)"
 if grep -q 'dank-theme.conf' "$ACTIVE" 2>/dev/null; then
@@ -200,19 +480,36 @@ elif grep -q 'themes/' "$ACTIVE" 2>/dev/null; then
     current_color="fijo: $(sed -n 's#.*themes/\(.*\)\.conf.*#\1#p' "$ACTIVE")"
 fi
 
-current_font="(la de kitty.conf)"
-if [ -f "$FONT_ACTIVE" ]; then
-    f="$(sed -n 's/^font_family.*family="\(.*\)".*/\1/p' "$FONT_ACTIVE" | head -1)"
-    [ -n "$f" ] && current_font="$f"
-fi
+# Extrae el nombre de familia de un font_family, soportando las dos formas:
+#   font_family      family="JetBrainsMono Nerd Font" style="..."
+#   font_family      Fira Code
+_font_of() {  # $1 = archivo .conf ; imprime la familia o nada
+    [ -f "$1" ] || return 0
+    local line fam
+    line="$(grep -m1 '^font_family' "$1" 2>/dev/null)" || return 0
+    [ -n "$line" ] || return 0
+    fam="$(printf '%s' "$line" | sed -n 's/.*family="\([^"]*\)".*/\1/p')"
+    if [ -z "$fam" ]; then
+        # forma simple: todo lo que sigue a font_family, sin opciones style=/postscript_name=
+        fam="$(printf '%s' "$line" | sed -E 's/^font_family[[:space:]]+//; s/[[:space:]]+(style|postscript_name|features)=.*//')"
+    fi
+    printf '%s' "$fam"
+}
+
+# La fuente que 'theme' fijó (font-active.conf) tiene prioridad; si no fijó
+# ninguna, mostramos la que realmente usa kitty (leída de kitty.conf).
+current_font="$(_font_of "$FONT_ACTIVE")"
+[ -n "$current_font" ] || current_font="$(_font_of "$KITTY_DIR/kitty.conf")"
+[ -n "$current_font" ] || current_font="(la default de kitty)"
 
 # ──────────────────────── menú principal (sin números) ───────────────────
 DYN='🎨 Color  · Dinámico   ·   DMS, sigue el wallpaper'
 FIX='🎨 Color  · Fijo       ·   elegir un tema de tu colección (con vista previa)'
+NEW='🖌️  Color  · Propio     ·   generá una paleta entera desde un color semilla'
 FNT='🔤 Fuente ·             elegir tipografía instalada en el sistema'
 
-mode=$(printf '%s\n%s\n%s\n' "$DYN" "$FIX" "$FNT" | fzf \
-    --height=40% --layout=reverse --border=rounded \
+mode=$(printf '%s\n%s\n%s\n%s\n' "$DYN" "$FIX" "$NEW" "$FNT" | fzf \
+    --height=45% --layout=reverse --border=rounded \
     --prompt='modo › ' \
     --header="kitty   ·   color actual: $current_color   ·   fuente actual: $current_font
 ↑/↓ moverse · Enter elegir · Esc salir" \
@@ -229,6 +526,9 @@ case "$mode" in
         else
             echo "Sin cambios."
         fi
+        ;;
+    "$NEW")
+        create_custom_theme
         ;;
     "$FNT")
         sel="$(pick_font)"

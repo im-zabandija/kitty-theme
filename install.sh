@@ -23,6 +23,7 @@ die()   { printf '✗ %s\n' "$1" >&2; exit 1; }
 command -v kitty   >/dev/null 2>&1 || warn "no encuentro 'kitty' en PATH — instalá el terminal primero."
 command -v fzf     >/dev/null 2>&1 || warn "falta 'fzf' (lo necesita el comando 'theme' para elegir). Instalalo con tu gestor de paquetes."
 command -v fc-list >/dev/null 2>&1 || warn "falta 'fc-list' (paquete fontconfig, lo necesita el picker de fuentes). Instalalo con tu gestor de paquetes."
+command -v awk     >/dev/null 2>&1 || warn "falta 'awk' (lo necesita el generador de temas propios). Instalalo con tu gestor de paquetes."
 
 # ─────────────────────── ubicar el código fuente ──────────────────────────
 # Si el script corre desde un checkout local (con themes/ al lado), lo usa
