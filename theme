@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# theme — alterna el esquema de color de kitty entre:
-#   1) Dinámico  -> danklinux/DMS (sigue el wallpaper)
-#   2) Fijo      -> un tema de ~/.config/kitty/themes/
-# Selección interactiva con fzf: flechas para pasar tema por tema y un panel
-# de vista previa en vivo (paleta + muestra tipo terminal) de cada uno.
-# Reescribe ~/.config/kitty/theme-active.conf y recarga kitty en caliente (SIGUSR1).
+# theme — alterna en caliente el look de kitty:
+#   Color:  1) Dinámico -> danklinux/DMS (sigue el wallpaper)
+#           2) Fijo     -> un tema de ~/.config/kitty/themes/
+#   Fuente: cualquier familia monoespaciada instalada en el sistema (fontconfig)
+# Selección interactiva con fzf: flechas para pasar uno por uno y un panel
+# de vista previa en vivo (paleta de color / info de tipografía) de cada opción.
+# Reescribe theme-active.conf / font-active.conf y recarga kitty en caliente (SIGUSR1).
 set -uo pipefail
 
 KITTY_DIR="${THEME_KITTY_DIR:-$HOME/.config/kitty}"
 ACTIVE="$KITTY_DIR/theme-active.conf"
+FONT_ACTIVE="$KITTY_DIR/font-active.conf"
 THEMES_DIR="$KITTY_DIR/themes"
 SELF="$(readlink -f "$0")"
 
-# ─────────────────────────── vista previa ────────────────────────────────
+# ─────────────────────── vista previa: color ──────────────────────────────
 # Renderiza un "swatch" del tema: la paleta de 16 colores + una muestra de
 # texto sobre el fondo real del tema. Uso interno — fzf lo invoca por cada
 # tema resaltado vía `theme --swatch <nombre>`.
@@ -71,10 +73,45 @@ _swatch() {
     printf '\n'
 }
 
-if [ "${1:-}" = "--swatch" ]; then
-    _swatch "${2:-}"
-    exit 0
-fi
+# ─────────────────────── vista previa: fuente ──────────────────────────────
+# fzf no puede renderizar cada línea con una tipografía distinta (el font es
+# de la ventana entera), así que el panel muestra metadata real vía
+# fontconfig: variantes disponibles (Regular/Bold/Italic/Bold Italic),
+# si es monoespaciada y si trae glifos Nerd Font. Uso interno vía
+# `theme --font-preview <familia>`.
+_font_preview() {
+    local fam="$1"
+    [ -n "$fam" ] || return
+    printf '\n  \033[1m%s\033[0m\n\n' "$fam"
+
+    local mono; mono=$(fc-list "$fam" spacing 2>/dev/null | grep -qm1 'spacing=100' && echo sí || echo no)
+    printf '  monoespaciada: %s\n' "$mono"
+
+    local nerd=no
+    [[ $fam == *[Nn]erd* ]] && nerd=sí
+    printf '  glifos Nerd Font: %s\n\n' "$nerd"
+
+    printf '  estilos instalados:\n'
+    local style found=0
+    for style in Regular Bold Italic "Bold Italic"; do
+        if fc-list "$fam:style=$style" 2>/dev/null | grep -qm1 .; then
+            printf '    ✓ %s\n' "$style"
+            found=1
+        fi
+    done
+    [ "$found" = 1 ] || printf '    (sin variantes detectadas por estilo exacto — kitty igual puede sintetizar bold/italic)\n'
+
+    printf '\n  user@kitty ~ $ theme\n'
+    printf '  const path = "/usr/local/bin"\n'
+    printf '  def greet(name): return name\n\n'
+    printf '  (fzf no puede previsualizar la tipografía real acá — el look final\n'
+    printf '   se ve al aplicar, la ventana recarga en caliente)\n'
+}
+
+case "${1:-}" in
+    --swatch)       _swatch "${2:-}"; exit 0 ;;
+    --font-preview) _font_preview "${2:-}"; exit 0 ;;
+esac
 
 # ──────────────────────────── prerequisitos ──────────────────────────────
 if [ ! -d "$THEMES_DIR" ]; then
@@ -83,6 +120,10 @@ if [ ! -d "$THEMES_DIR" ]; then
 fi
 if ! command -v fzf >/dev/null 2>&1; then
     echo "✗ Falta 'fzf'. Instalalo (binario en ~/.local/bin o con tu gestor) y reintentá." >&2
+    exit 1
+fi
+if ! command -v fc-list >/dev/null 2>&1; then
+    echo "✗ Falta 'fc-list' (paquete fontconfig). Instalalo y reintentá." >&2
     exit 1
 fi
 
@@ -107,6 +148,17 @@ set_fixed() {  # $1 = nombre del tema (sin .conf)
     reload_kitty
 }
 
+set_font() {  # $1 = nombre de familia tipográfica
+    {
+        printf 'font_family      family="%s"\n' "$1"
+        printf 'bold_font        family="%s"\n' "$1"
+        printf 'italic_font      family="%s"\n' "$1"
+        printf 'bold_italic_font family="%s"\n' "$1"
+    } > "$FONT_ACTIVE"
+    echo "✅ Fuente: $1"
+    reload_kitty
+}
+
 pick_theme() {  # imprime el tema elegido en stdout (vacío si se cancela)
     local names
     names=$(cd "$THEMES_DIR" && shopt -s nullglob && printf '%s\n' *.conf | sed 's/\.conf$//' | sort)
@@ -121,22 +173,48 @@ pick_theme() {  # imprime el tema elegido en stdout (vacío si se cancela)
         --preview-label=' vista previa '
 }
 
+pick_font() {  # imprime la familia elegida en stdout (vacío si se cancela)
+    local names
+    names=$(fc-list : family spacing 2>/dev/null \
+        | grep 'spacing=100' \
+        | sed -E 's/:style=.*//; s/:spacing=100//' \
+        | tr ',' '\n' \
+        | sed '/^$/d' \
+        | sort -u)
+    [ -n "$names" ] || return 0
+    printf '%s\n' "$names" | fzf \
+        --height=90% --layout=reverse --border=rounded \
+        --prompt='fuente › ' \
+        --header='↑/↓ pasar una por una · escribí para filtrar · Enter aplicar · Esc cancelar' \
+        --header-first \
+        --preview="'$SELF' --font-preview {}" \
+        --preview-window='right,62%,border-left,wrap' \
+        --preview-label=' info '
+}
+
 # ──────────────────────────── estado actual ──────────────────────────────
-current="(desconocido)"
+current_color="(desconocido)"
 if grep -q 'dank-theme.conf' "$ACTIVE" 2>/dev/null; then
-    current="dinámico (DMS)"
+    current_color="dinámico (DMS)"
 elif grep -q 'themes/' "$ACTIVE" 2>/dev/null; then
-    current="fijo: $(sed -n 's#.*themes/\(.*\)\.conf.*#\1#p' "$ACTIVE")"
+    current_color="fijo: $(sed -n 's#.*themes/\(.*\)\.conf.*#\1#p' "$ACTIVE")"
+fi
+
+current_font="(la de kitty.conf)"
+if [ -f "$FONT_ACTIVE" ]; then
+    f="$(sed -n 's/^font_family.*family="\(.*\)".*/\1/p' "$FONT_ACTIVE" | head -1)"
+    [ -n "$f" ] && current_font="$f"
 fi
 
 # ──────────────────────── menú principal (sin números) ───────────────────
-DYN='Dinámico   ·   DMS, sigue el wallpaper'
-FIX='Fijo       ·   elegir un tema de tu colección (con vista previa)'
+DYN='🎨 Color  · Dinámico   ·   DMS, sigue el wallpaper'
+FIX='🎨 Color  · Fijo       ·   elegir un tema de tu colección (con vista previa)'
+FNT='🔤 Fuente ·             elegir tipografía instalada en el sistema'
 
-mode=$(printf '%s\n%s\n' "$DYN" "$FIX" | fzf \
+mode=$(printf '%s\n%s\n%s\n' "$DYN" "$FIX" "$FNT" | fzf \
     --height=40% --layout=reverse --border=rounded \
     --prompt='modo › ' \
-    --header="🎨 Tema de kitty   ·   actual: $current
+    --header="kitty   ·   color actual: $current_color   ·   fuente actual: $current_font
 ↑/↓ moverse · Enter elegir · Esc salir" \
     --header-first)
 
@@ -148,6 +226,14 @@ case "$mode" in
         sel="$(pick_theme)"
         if [ -n "$sel" ]; then
             set_fixed "$sel"
+        else
+            echo "Sin cambios."
+        fi
+        ;;
+    "$FNT")
+        sel="$(pick_font)"
+        if [ -n "$sel" ]; then
+            set_font "$sel"
         else
             echo "Sin cambios."
         fi

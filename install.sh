@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# install.sh — instala el switcher de temas de kitty (comando `theme`).
+# install.sh — instala el switcher de temas y tipografías de kitty (comando `theme`).
 # Uso remoto (recomendado, un solo comando):
 #   curl -fsSL https://raw.githubusercontent.com/im-zabandija/kitty-theme/main/install.sh | bash
 # Uso local (repo ya clonado):
 #   ./install.sh
 #
 # Es idempotente y no destructivo: solo agrega archivos y, si hace falta,
-# una línea `include theme-active.conf` al final de tu kitty.conf.
+# líneas `include theme-active.conf` / `include font-active.conf` al final
+# de tu kitty.conf.
 set -euo pipefail
 
 REPO_URL="https://github.com/im-zabandija/kitty-theme.git"
@@ -19,8 +20,9 @@ ok()    { printf '✅ %s\n' "$1"; }
 warn()  { printf '⚠️  %s\n' "$1" >&2; }
 die()   { printf '✗ %s\n' "$1" >&2; exit 1; }
 
-command -v kitty >/dev/null 2>&1 || warn "no encuentro 'kitty' en PATH — instalá el terminal primero."
-command -v fzf   >/dev/null 2>&1 || warn "falta 'fzf' (lo necesita el comando 'theme' para elegir). Instalalo con tu gestor de paquetes."
+command -v kitty   >/dev/null 2>&1 || warn "no encuentro 'kitty' en PATH — instalá el terminal primero."
+command -v fzf     >/dev/null 2>&1 || warn "falta 'fzf' (lo necesita el comando 'theme' para elegir). Instalalo con tu gestor de paquetes."
+command -v fc-list >/dev/null 2>&1 || warn "falta 'fc-list' (paquete fontconfig, lo necesita el picker de fuentes). Instalalo con tu gestor de paquetes."
 
 # ─────────────────────── ubicar el código fuente ──────────────────────────
 # Si el script corre desde un checkout local (con themes/ al lado), lo usa
@@ -61,14 +63,27 @@ if [ ! -f "$KITTY_DIR/dank-theme.conf" ]; then
     cp "$KITTY_DIR/themes/$DEFAULT_THEME.conf" "$KITTY_DIR/dank-theme.conf"
 fi
 
-# kitty.conf: agrega el include solo si no está ya.
+# font-active.conf: no lo piso si ya existe. Vacío por defecto -> kitty usa
+# la fuente que ya tenías configurada hasta que elijas una con `theme`.
+if [ ! -f "$KITTY_DIR/font-active.conf" ]; then
+    printf '# Tipografía activa de kitty — la gestiona el comando `theme`.\n# Vacío: kitty usa la fuente definida más arriba en kitty.conf (o su default).\n' > "$KITTY_DIR/font-active.conf"
+    ok "fuente activa: sin cambios (la de tu kitty.conf)"
+fi
+
+# kitty.conf: agrega los includes solo si no están ya.
 KITTY_CONF="$KITTY_DIR/kitty.conf"
 touch "$KITTY_CONF"
 if ! grep -q '^include theme-active.conf' "$KITTY_CONF"; then
     printf '\n# Esquema de color: lo controla el comando `theme`\ninclude theme-active.conf\n' >> "$KITTY_CONF"
     ok "agregado 'include theme-active.conf' a tu kitty.conf"
 else
-    info "kitty.conf ya tenía el include, no se tocó."
+    info "kitty.conf ya tenía el include de color, no se tocó."
+fi
+if ! grep -q '^include font-active.conf' "$KITTY_CONF"; then
+    printf '\n# Tipografía: la controla el comando `theme`\ninclude font-active.conf\n' >> "$KITTY_CONF"
+    ok "agregado 'include font-active.conf' a tu kitty.conf"
+else
+    info "kitty.conf ya tenía el include de fuente, no se tocó."
 fi
 
 case ":$PATH:" in
