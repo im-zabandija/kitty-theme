@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# theme — alterna el esquema de color de kitty entre:
+#   1) Dinámico  -> danklinux/DMS (sigue el wallpaper)
+#   2) Fijo      -> un tema de ~/.config/kitty/themes/
+# Selección interactiva con fzf: flechas para pasar tema por tema y un panel
+# de vista previa en vivo (paleta + muestra tipo terminal) de cada uno.
+# Reescribe ~/.config/kitty/theme-active.conf y recarga kitty en caliente (SIGUSR1).
+set -uo pipefail
+
+KITTY_DIR="${THEME_KITTY_DIR:-$HOME/.config/kitty}"
+ACTIVE="$KITTY_DIR/theme-active.conf"
+THEMES_DIR="$KITTY_DIR/themes"
+SELF="$(readlink -f "$0")"
+
+# ─────────────────────────── vista previa ────────────────────────────────
+# Renderiza un "swatch" del tema: la paleta de 16 colores + una muestra de
+# texto sobre el fondo real del tema. Uso interno — fzf lo invoca por cada
+# tema resaltado vía `theme --swatch <nombre>`.
+_hex_rgb() {  # "#rrggbb" -> "r g b"
+    local h=${1#\#}
+    printf '%d %d %d' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"
+}
+
+_swatch() {
+    local name="$1" f="$THEMES_DIR/$1.conf"
+    if [ ! -f "$f" ]; then
+        printf '\n  (no se pudo leer el tema "%s")\n' "$name"
+        return
+    fi
+
+    declare -A C=()
+    local key val
+    while read -r key val _; do
+        case "$key" in
+            foreground|background|color[0-9]|color1[0-5])
+                [[ $val =~ ^#[0-9A-Fa-f]{6}$ ]] && C[$key]=$val ;;
+        esac
+    done < "$f"
+
+    local bg=${C[background]:-#101010} fg=${C[foreground]:-#d0d0d0}
+    local br bgg bb;  read -r br bgg bb  < <(_hex_rgb "$bg")
+
+    printf '\n  \033[1m%s\033[0m\n' "$name"
+    printf '  fg %s   bg %s\n\n' "$fg" "$bg"
+
+    # Paleta: fila 0-7 y fila 8-15
+    local i r g b half
+    for half in "0 1 2 3 4 5 6 7" "8 9 10 11 12 13 14 15"; do
+        printf '  '
+        for i in $half; do
+            read -r r g b < <(_hex_rgb "${C[color$i]:-$bg}")
+            printf '\033[48;2;%d;%d;%dm    \033[0m' "$r" "$g" "$b"
+        done
+        printf '\n'
+    done
+    printf '\n'
+
+    # Muestra tipo terminal, sobre el fondo real del tema
+    _row() {  # $1 = color hex del texto, $2 = texto
+        local tr tg tb; read -r tr tg tb < <(_hex_rgb "$1")
+        printf '  \033[48;2;%d;%d;%dm\033[38;2;%d;%d;%dm %-36s\033[0m\n' \
+            "$br" "$bgg" "$bb" "$tr" "$tg" "$tb" "$2"
+    }
+    _row "$fg"               'user@kitty ~ $ theme'
+    _row "${C[color2]:-$fg}" '✓ build passed         +128 −7'
+    _row "${C[color1]:-$fg}" '✗ error: module not found'
+    _row "${C[color3]:-$fg}" '⚠ warning: retrying in 3s…'
+    _row "${C[color4]:-$fg}" 'const path = "/usr/local/bin"'
+    _row "${C[color5]:-$fg}" 'def greet(name): return name'
+    _row "${C[color6]:-$fg}" 'https://sw.kovidgoyal.net/kitty'
+    printf '\n'
+}
+
+if [ "${1:-}" = "--swatch" ]; then
+    _swatch "${2:-}"
+    exit 0
+fi
+
+# ──────────────────────────── prerequisitos ──────────────────────────────
+if [ ! -d "$THEMES_DIR" ]; then
+    echo "✗ No existe $THEMES_DIR" >&2
+    exit 1
+fi
+if ! command -v fzf >/dev/null 2>&1; then
+    echo "✗ Falta 'fzf'. Instalalo (binario en ~/.local/bin o con tu gestor) y reintentá." >&2
+    exit 1
+fi
+
+# ──────────────────────────── acciones ───────────────────────────────────
+reload_kitty() {
+    if pkill -SIGUSR1 -x kitty 2>/dev/null; then
+        echo "🔄 kitty recargado."
+    else
+        echo "ℹ️  No hay kitty corriendo; se aplica al abrir una ventana nueva."
+    fi
+}
+
+set_dynamic() {
+    printf 'include dank-theme.conf\n' > "$ACTIVE"
+    echo "✅ Modo dinámico (DMS)."
+    reload_kitty
+}
+
+set_fixed() {  # $1 = nombre del tema (sin .conf)
+    printf 'include themes/%s.conf\n' "$1" > "$ACTIVE"
+    echo "✅ Tema fijo: $1"
+    reload_kitty
+}
+
+pick_theme() {  # imprime el tema elegido en stdout (vacío si se cancela)
+    local names
+    names=$(cd "$THEMES_DIR" && shopt -s nullglob && printf '%s\n' *.conf | sed 's/\.conf$//' | sort)
+    [ -n "$names" ] || return 0
+    printf '%s\n' "$names" | fzf \
+        --height=90% --layout=reverse --border=rounded \
+        --prompt='tema › ' \
+        --header='↑/↓ pasar uno por uno · escribí para filtrar · Enter aplicar · Esc cancelar' \
+        --header-first \
+        --preview="'$SELF' --swatch {}" \
+        --preview-window='right,62%,border-left,wrap' \
+        --preview-label=' vista previa '
+}
+
+# ──────────────────────────── estado actual ──────────────────────────────
+current="(desconocido)"
+if grep -q 'dank-theme.conf' "$ACTIVE" 2>/dev/null; then
+    current="dinámico (DMS)"
+elif grep -q 'themes/' "$ACTIVE" 2>/dev/null; then
+    current="fijo: $(sed -n 's#.*themes/\(.*\)\.conf.*#\1#p' "$ACTIVE")"
+fi
+
+# ──────────────────────── menú principal (sin números) ───────────────────
+DYN='Dinámico   ·   DMS, sigue el wallpaper'
+FIX='Fijo       ·   elegir un tema de tu colección (con vista previa)'
+
+mode=$(printf '%s\n%s\n' "$DYN" "$FIX" | fzf \
+    --height=40% --layout=reverse --border=rounded \
+    --prompt='modo › ' \
+    --header="🎨 Tema de kitty   ·   actual: $current
+↑/↓ moverse · Enter elegir · Esc salir" \
+    --header-first)
+
+case "$mode" in
+    "$DYN")
+        set_dynamic
+        ;;
+    "$FIX")
+        sel="$(pick_theme)"
+        if [ -n "$sel" ]; then
+            set_fixed "$sel"
+        else
+            echo "Sin cambios."
+        fi
+        ;;
+    *)
+        echo "Sin cambios."
+        ;;
+esac
