@@ -44,7 +44,11 @@ fi
 # ────────────────────────────── instalar ───────────────────────────────────
 mkdir -p "$KITTY_DIR/themes" "$BIN_DIR"
 
-cp "$SRC_DIR/theme" "$BIN_DIR/theme"
+# -ef: si ~/.local/bin/theme ya ES este archivo (p. ej. symlink de desarrollo
+# al checkout), cp fallaría con "same file" y set -e abortaría la instalación.
+if [ ! "$SRC_DIR/theme" -ef "$BIN_DIR/theme" ]; then
+    cp "$SRC_DIR/theme" "$BIN_DIR/theme"
+fi
 chmod +x "$BIN_DIR/theme"
 ok "comando 'theme' -> $BIN_DIR/theme"
 
@@ -71,6 +75,43 @@ if [ ! -f "$KITTY_DIR/font-active.conf" ]; then
     ok "fuente activa: sin cambios (la de tu kitty.conf)"
 fi
 
+# cursor-active.conf: no lo piso si ya existe. Por defecto replica el trail
+# "ninja" que ya tenías hardcodeado en kitty.conf (200ms, decay 0.1/0.4,
+# threshold 2, forma block, parpadeo sí) — instalar no cambia nada visible.
+if [ ! -f "$KITTY_DIR/cursor-active.conf" ]; then
+    {
+        printf 'cursor_shape                 block\n'
+        printf 'cursor_blink_interval         1\n'
+        printf 'cursor_trail                 200\n'
+        printf 'cursor_trail_decay           0.1 0.4\n'
+        printf 'cursor_trail_start_threshold 2\n'
+        printf 'cursor_trail_color           none\n'
+    } > "$KITTY_DIR/cursor-active.conf"
+    ok "cursor activo inicial: trail medio, bloque, parpadeo sí"
+fi
+
+# window-active.conf: no lo piso si ya existe. Por defecto replica la
+# transparencia/blur/padding que ya tenías hardcodeados en kitty.conf.
+if [ ! -f "$KITTY_DIR/window-active.conf" ]; then
+    {
+        printf 'background_opacity   0.75\n'
+        printf 'background_blur      32\n'
+        printf 'window_padding_width 4\n'
+    } > "$KITTY_DIR/window-active.conf"
+    ok "ventana activa inicial: opacidad 0.75, blur 32, padding 4"
+fi
+
+# tabs-active.conf: no lo piso si ya existe. Por defecto replica el estilo
+# que ya trae dank-tabs.conf (powerline curvo, arriba).
+if [ ! -f "$KITTY_DIR/tabs-active.conf" ]; then
+    {
+        printf 'tab_bar_style        powerline\n'
+        printf 'tab_powerline_style  slanted\n'
+        printf 'tab_bar_edge         top\n'
+    } > "$KITTY_DIR/tabs-active.conf"
+    ok "tabs activas inicial: powerline curvo, arriba"
+fi
+
 # kitty.conf: agrega los includes solo si no están ya.
 KITTY_CONF="$KITTY_DIR/kitty.conf"
 touch "$KITTY_CONF"
@@ -85,6 +126,27 @@ if ! grep -q '^include font-active.conf' "$KITTY_CONF"; then
     ok "agregado 'include font-active.conf' a tu kitty.conf"
 else
     info "kitty.conf ya tenía el include de fuente, no se tocó."
+fi
+
+if ! grep -q '^include cursor-active.conf' "$KITTY_CONF"; then
+    printf '\n# Cursor (forma/parpadeo/trail ninja): lo controla el comando `theme`\ninclude cursor-active.conf\n' >> "$KITTY_CONF"
+    ok "agregado 'include cursor-active.conf' a tu kitty.conf"
+else
+    info "kitty.conf ya tenía el include de cursor, no se tocó."
+fi
+
+if ! grep -q '^include window-active.conf' "$KITTY_CONF"; then
+    printf '\n# Ventana (transparencia/blur/padding): lo controla el comando `theme`\ninclude window-active.conf\n' >> "$KITTY_CONF"
+    ok "agregado 'include window-active.conf' a tu kitty.conf"
+else
+    info "kitty.conf ya tenía el include de ventana, no se tocó."
+fi
+
+if ! grep -q '^include tabs-active.conf' "$KITTY_CONF"; then
+    printf '\n# Tabs (estilo/posición): lo controla el comando `theme`\ninclude tabs-active.conf\n' >> "$KITTY_CONF"
+    ok "agregado 'include tabs-active.conf' a tu kitty.conf"
+else
+    info "kitty.conf ya tenía el include de tabs, no se tocó."
 fi
 
 case ":$PATH:" in

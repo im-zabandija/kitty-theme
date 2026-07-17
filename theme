@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
 # theme — alterna en caliente el look de kitty:
-#   Color:  1) Dinámico -> danklinux/DMS (sigue el wallpaper)
-#           2) Fijo     -> un tema de ~/.config/kitty/themes/
-#           3) Propio   -> generá una paleta entera desde un color semilla
-#   Fuente: cualquier familia monoespaciada instalada en el sistema (fontconfig)
+#   Color:   1) Dinámico -> danklinux/DMS (sigue el wallpaper)
+#            2) Fijo     -> un tema de ~/.config/kitty/themes/
+#            3) Propio   -> generá una paleta entera desde un color semilla
+#            4) Sorpréndeme -> un tema al azar de la colección
+#   Fuente:  cualquier familia monoespaciada instalada en el sistema (fontconfig)
+#   Cursor:  trail "ninja" (intensidad), forma y parpadeo
+#   Ventana: transparencia, blur y padding
+#   Tabs:    estilo (powerline/fade/separador/oculta) y posición
 # Selección interactiva con fzf: flechas para pasar uno por uno y un panel
 # de vista previa en vivo (paleta de color / info de tipografía) de cada opción.
-# Reescribe theme-active.conf / font-active.conf y recarga kitty en caliente (SIGUSR1).
+# Reescribe los <x>-active.conf y recarga kitty en caliente (SIGUSR1).
 set -uo pipefail
 
 KITTY_DIR="${THEME_KITTY_DIR:-$HOME/.config/kitty}"
 ACTIVE="$KITTY_DIR/theme-active.conf"
 FONT_ACTIVE="$KITTY_DIR/font-active.conf"
+CURSOR_ACTIVE="$KITTY_DIR/cursor-active.conf"
+WINDOW_ACTIVE="$KITTY_DIR/window-active.conf"
+TABS_ACTIVE="$KITTY_DIR/tabs-active.conf"
 THEMES_DIR="$KITTY_DIR/themes"
 DRAFT="$THEMES_DIR/.custom-draft.conf"
 SELF="$(readlink -f "$0")"
@@ -168,9 +175,12 @@ BEGIN {
     rgb2hsl(R,G,B)
     seedH = Hg; seedS = clamp(Sg,45,90)
 
-    jr = (jitter==0) ? 0 : (rand()-0.5)
-    tint   = 0.22 + jr*0.10        # cuánto del matiz semilla se filtra a cada acento
-    satmix = 0.55 + jr*0.15        # mezcla saturación semilla vs base
+    jr = (jitter==0) ? 0 : (rand()-0.5)        # -0.5..0.5
+    hueJit = jr*30                              # ±15° — rotación de matiz claramente visible
+    tint   = 0.22 + jr*0.16                     # antes: 0.22 + jr*0.10
+    satmix = 0.55 + jr*0.20                     # antes: 0.55 + jr*0.15
+    workH  = seedH + hueJit
+    workS  = clamp(seedS + jr*20, 30, 95)
 
     split("red green yellow blue magenta cyan", names, " ")
     anchor["red"]=6; anchor["green"]=132; anchor["yellow"]=44
@@ -192,21 +202,21 @@ BEGIN {
         selL=bgL+12
     }
 
-    printf "background %s\n", hsl2hex(seedH, bgS, bgL)
-    printf "foreground %s\n", hsl2hex(seedH, fgS, fgL)
+    printf "background %s\n", hsl2hex(workH, clamp(bgS+jr*10,0,60), bgL)
+    printf "foreground %s\n", hsl2hex(workH, fgS, fgL)
     printf "cursor #%s\n", hex
-    printf "selection_background %s\n", hsl2hex(seedH, bgS+6, selL)
-    printf "selection_foreground %s\n", hsl2hex(seedH, fgS, fgL)
+    printf "selection_background %s\n", hsl2hex(workH, bgS+6, selL)
+    printf "selection_foreground %s\n", hsl2hex(workH, fgS, fgL)
 
-    printf "color0 %s\n",  hsl2hex(seedH, blackS,  blackL)
-    printf "color8 %s\n",  hsl2hex(seedH, grayS,   grayL)
-    printf "color7 %s\n",  hsl2hex(seedH, whiteS,  whiteL)
-    printf "color15 %s\n", hsl2hex(seedH, brightWS, brightWL)
+    printf "color0 %s\n",  hsl2hex(workH, blackS,  blackL)
+    printf "color8 %s\n",  hsl2hex(workH, grayS,   grayL)
+    printf "color7 %s\n",  hsl2hex(workH, whiteS,  whiteL)
+    printf "color15 %s\n", hsl2hex(workH, brightWS, brightWL)
 
     for (i=1;i<=6;i++) {
         n = names[i]
-        h = anchor[n] + tint*angdiff(seedH, anchor[n])
-        s = satmix*seedS + (1-satmix)*68
+        h = anchor[n] + tint*angdiff(workH, anchor[n])
+        s = satmix*workS + (1-satmix)*68
         printf "color%d %s\n", idx[n],   hsl2hex(h, s,                normL)
         printf "color%d %s\n", idx[n]+8, hsl2hex(h, clamp(s+8,0,95),  brightL)
     }
@@ -217,13 +227,17 @@ AWK
 # ─────────────────── vista previa en vivo: tema propio ─────────────────────
 # Genera el draft desde el hex resaltado, lo aplica a tu kitty AL INSTANTE
 # (para que veas el tema completo en tu ventana real) y dibuja el swatch.
-# Uso interno vía `theme --custom-preview "<línea de acento>" <dark|light>`.
-_custom_preview() {
-    local line="$1" mode="${2:-dark}" hex
-    hex="$(printf '%s' "$line" | grep -oiE '#[0-9a-f]{6}' | tail -1)"
+# Uso interno vía `theme --custom-preview "<query>" "<línea de acento>" <dark|light>`.
+_custom_preview() {  # $1=query (texto tipeado en fzf) $2=línea resaltada $3=dark|light
+    local query="$1" line="$2" mode="${3:-dark}" hex q
+    q="$(printf '%s' "$query" | tr -d '[:space:]')"
+    if [[ $q =~ ^#?[0-9A-Fa-f]{6}$ ]]; then
+        hex="$q"; [[ $hex == \#* ]] || hex="#$hex"
+    else
+        hex="$(printf '%s' "$line" | grep -oiE '#[0-9a-f]{6}' | tail -1)"
+    fi
     if [ -z "$hex" ]; then
-        printf '\n  ✍️  Elegí esta opción y vas a poder escribir\n'
-        printf '      cualquier color en formato #rrggbb.\n'
+        printf '\n  ✍️  Escribí cualquier color en formato #rrggbb\n      (con o sin numeral) acá arriba y vas a ver la paleta.\n'
         return
     fi
     _gen_palette "$hex" "$mode" 0 > "$DRAFT"
@@ -235,7 +249,7 @@ _custom_preview() {
 case "${1:-}" in
     --swatch)         _swatch "${2:-}"; exit 0 ;;
     --font-preview)   _font_preview "${2:-}"; exit 0 ;;
-    --custom-preview) _custom_preview "${2:-}" "${3:-dark}"; exit 0 ;;
+    --custom-preview) _custom_preview "${2:-}" "${3:-}" "${4:-dark}"; exit 0 ;;
 esac
 
 # ──────────────────────────── prerequisitos ──────────────────────────────
@@ -323,7 +337,7 @@ pick_font() {  # imprime la familia elegida en stdout (vacío si se cancela)
 
 # ───────────────────── crear tema propio (paleta desde semilla) ────────────
 # Acentos sugeridos: cada línea trae su propio swatch de color renderizado
-# en el menú (fzf --ansi), + un ítem para tipear cualquier hex a mano.
+# en el menú (fzf --ansi); también se puede tipear cualquier #rrggbb directo.
 _accent_list() {
     local a name hex r g b
     # nombre|hex — semillas lindas y variadas
@@ -338,25 +352,32 @@ _accent_list() {
         read -r r g b < <(_hex_rgb "$hex")
         printf '\033[48;2;%d;%d;%dm      \033[0m  %-12s %s\n' "$r" "$g" "$b" "$name" "$hex"
     done
-    printf '  ✍️  %-12s (ingresar un hex a mano)\n' "Otro…"
 }
 
-pick_accent() {  # $1=mode ; imprime hex, "__MANUAL__" o nada (cancela)
-    local mode="$1" sel
-    sel=$(_accent_list | fzf --ansi \
+pick_accent() {  # $1=mode ; imprime hex o nada (cancela)
+    local mode="$1" out query sel q
+    out=$(_accent_list | fzf --ansi --print-query \
         --height=90% --layout=reverse --border=rounded \
         --prompt='semilla › ' \
-        --header='↑/↓ pasar una por una · Enter elegir · Esc cancelar · el tema se aplica en vivo mientras navegás' \
+        --header='↑/↓ pasar una por una · Enter elegir · tipeá #rrggbb para un color libre (con vista previa en vivo) · Esc cancelar' \
         --header-first \
-        --preview="'$SELF' --custom-preview \"{}\" $mode" \
+        --preview="'$SELF' --custom-preview {q} {} $mode" \
         --preview-window='right,62%,border-left,wrap' \
         --preview-label=' vista previa en vivo ')
-    [ -n "$sel" ] || return 0
-    if [[ $sel == *"ingresar un hex a mano"* ]]; then
-        printf '__MANUAL__'
+    query="$(printf '%s\n' "$out" | sed -n '1p')"
+    sel="$(printf '%s\n' "$out" | sed -n '2p')"
+    # La query hex tipeada gana sobre la selección — consistente con el
+    # preview, que también prioriza la query (evita que un fuzzy-match
+    # accidental aplique otro color que el que se estaba viendo).
+    q="$(printf '%s' "$query" | tr -d '[:space:]')"
+    if [[ $q =~ ^#?[0-9A-Fa-f]{6}$ ]]; then
+        [[ $q == \#* ]] || q="#$q"
+        printf '%s' "$q"
         return 0
     fi
-    printf '%s' "$(printf '%s' "$sel" | grep -oiE '#[0-9a-f]{6}' | tail -1)"
+    if [ -n "$sel" ]; then
+        printf '%s' "$(printf '%s' "$sel" | grep -oiE '#[0-9a-f]{6}' | tail -1)"
+    fi
 }
 
 _restore_active() {  # $1=había_active(1/0)  $2=contenido_previo
@@ -373,17 +394,6 @@ _apply_draft() {  # $1=hex $2=mode $3=jitter — genera draft, lo apunta y recar
     pkill -SIGUSR1 -x kitty 2>/dev/null || true
 }
 
-_read_manual_hex() {  # imprime hex válido o nada
-    local input
-    read -r -p "Color semilla en hex (#rrggbb, vacío cancela): " input
-    [ -n "$input" ] || return 0
-    if [[ ! $input =~ ^#[0-9A-Fa-f]{6}$ ]]; then
-        echo "✗ Formato inválido, tiene que ser #rrggbb." >&2
-        return 1
-    fi
-    printf '%s' "$input"
-}
-
 create_custom_theme() {
     local orig_active="" had_active=0
     if [ -f "$ACTIVE" ]; then orig_active="$(cat "$ACTIVE")"; had_active=1; fi
@@ -398,21 +408,12 @@ create_custom_theme() {
     [ -n "$mc" ] || { echo "Sin cambios."; return; }
     local mode="dark"; [ "$mc" = "$ML" ] && mode="light"
 
-    # 2) semilla (con preview en vivo)
-    local seed_hex="" res
-    while :; do
-        res="$(pick_accent "$mode")"
-        if [ -z "$res" ]; then
-            _restore_active "$had_active" "$orig_active"; reload_kitty; echo "Sin cambios."; return
-        elif [ "$res" = "__MANUAL__" ]; then
-            local h; h="$(_read_manual_hex)" || continue
-            [ -n "$h" ] || { _restore_active "$had_active" "$orig_active"; reload_kitty; echo "Sin cambios."; return; }
-            seed_hex="$h"; _apply_draft "$seed_hex" "$mode" 0; break
-        else
-            seed_hex="$res"; break   # pick_accent ya dejó el draft aplicado por el preview
-        fi
-    done
-    # garantizar draft aplicado (por si venía de un preview previo)
+    # 2) semilla (con preview en vivo, incluye hex libre tipeado)
+    local seed_hex=""
+    seed_hex="$(pick_accent "$mode")"
+    if [ -z "$seed_hex" ]; then
+        _restore_active "$had_active" "$orig_active"; reload_kitty; echo "Sin cambios."; return
+    fi
     _apply_draft "$seed_hex" "$mode" 0
 
     # 3) ajustar / guardar
@@ -448,12 +449,8 @@ create_custom_theme() {
                 _apply_draft "$seed_hex" "$mode" "$jitter"
                 ;;
             "$RESEED")
-                res="$(pick_accent "$mode")"
-                if [ "$res" = "__MANUAL__" ]; then
-                    local h; h="$(_read_manual_hex)" && [ -n "$h" ] && seed_hex="$h"
-                elif [ -n "$res" ]; then
-                    seed_hex="$res"
-                fi
+                local res; res="$(pick_accent "$mode")"
+                [ -n "$res" ] && seed_hex="$res"
                 jitter=0
                 _apply_draft "$seed_hex" "$mode" 0
                 ;;
@@ -468,6 +465,187 @@ create_custom_theme() {
                 echo "Descartado, volví al tema anterior."
                 return
                 ;;
+        esac
+    done
+}
+
+# ──────────────── toggles de kitty: cursor / ventana / tabs ────────────────
+# Mismo patrón que color/fuente: cada grupo vive en su <x>-active.conf,
+# `theme` lo reescribe entero y recarga kitty en caliente.
+_conf_val() {  # $1=archivo $2=clave ; imprime el resto de la línea o nada
+    [ -f "$1" ] || return 0
+    sed -n "s/^$2[[:space:]]\+//p" "$1" | head -1
+}
+
+set_cursor() {  # $1=shape $2=blink(0|1) $3=trail_ms $4=decay $5=threshold
+    {
+        printf 'cursor_shape                 %s\n' "$1"
+        printf 'cursor_blink_interval         %s\n' "$2"
+        printf 'cursor_trail                 %s\n' "$3"
+        printf 'cursor_trail_decay           %s\n' "$4"
+        printf 'cursor_trail_start_threshold %s\n' "$5"
+        printf 'cursor_trail_color           none\n'
+    } > "$CURSOR_ACTIVE"
+    echo "✅ Cursor actualizado."
+    reload_kitty
+}
+
+pick_cursor() {
+    local cur_trail; cur_trail="$(_conf_val "$CURSOR_ACTIVE" cursor_trail)"
+    local T_OFF='🚫 Sin trail (cursor clásico)'
+    local T_SUTIL='🥷 Sutil (solo saltos grandes)'
+    local T_MEDIO='🥷 Medio (por defecto)'
+    local T_EXAG='🥷 Exagerado (rastro largo)'
+    local trail_pick
+    trail_pick=$(printf '%s\n%s\n%s\n%s\n' "$T_OFF" "$T_SUTIL" "$T_MEDIO" "$T_EXAG" | fzf \
+        --height=35% --layout=reverse --border=rounded \
+        --prompt='trail › ' \
+        --header="🖱️  Cursor · paso 1/2: intensidad del rastro ninja · actual: ${cur_trail:-200} ms
+↑/↓ moverse · Enter elegir · Esc cancelar" --header-first)
+    [ -n "$trail_pick" ] || { echo "Sin cambios."; return; }
+    local trail_ms trail_decay trail_thr
+    case "$trail_pick" in
+        "$T_OFF")   trail_ms=0;   trail_decay="0.1 0.4"; trail_thr=2 ;;
+        "$T_SUTIL") trail_ms=400; trail_decay="0.2 0.5"; trail_thr=4 ;;
+        "$T_MEDIO") trail_ms=200; trail_decay="0.1 0.4"; trail_thr=2 ;;
+        "$T_EXAG")  trail_ms=60;  trail_decay="0.1 0.7"; trail_thr=1 ;;
+    esac
+
+    local S_BP='▊ Bloque · parpadeo sí' S_BF='▊ Bloque · fijo'
+    local S_IP='▏Barra · parpadeo sí'   S_IF='▏Barra · fijo'
+    local S_UP='▁ Subrayado · parpadeo sí' S_UF='▁ Subrayado · fijo'
+    local shape_pick
+    shape_pick=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$S_BP" "$S_BF" "$S_IP" "$S_IF" "$S_UP" "$S_UF" | fzf \
+        --height=45% --layout=reverse --border=rounded \
+        --prompt='forma › ' \
+        --header='🖱️  Cursor · paso 2/2: forma y parpadeo
+↑/↓ moverse · Enter elegir · Esc cancelar' --header-first)
+    [ -n "$shape_pick" ] || { echo "Sin cambios."; return; }
+    local shape blink
+    case "$shape_pick" in
+        "$S_BP") shape=block;     blink=1 ;;
+        "$S_BF") shape=block;     blink=0 ;;
+        "$S_IP") shape=beam;      blink=1 ;;
+        "$S_IF") shape=beam;      blink=0 ;;
+        "$S_UP") shape=underline; blink=1 ;;
+        "$S_UF") shape=underline; blink=0 ;;
+    esac
+
+    set_cursor "$shape" "$blink" "$trail_ms" "$trail_decay" "$trail_thr"
+}
+
+set_window() {  # $1=opacity $2=blur $3=padding
+    {
+        printf 'background_opacity   %s\n' "$1"
+        printf 'background_blur      %s\n' "$2"
+        printf 'window_padding_width %s\n' "$3"
+    } > "$WINDOW_ACTIVE"
+    echo "✅ Ventana actualizada."
+    reload_kitty
+}
+
+pick_window() {
+    local O_OP='🔲 Opaco (sin transparencia)'
+    local O_SU='🌫️ Sutil'
+    local O_MA='🌫️ Marcado (por defecto)'
+    local op_pick
+    op_pick=$(printf '%s\n%s\n%s\n' "$O_OP" "$O_SU" "$O_MA" | fzf \
+        --height=30% --layout=reverse --border=rounded \
+        --prompt='transparencia › ' \
+        --header='🪟 Ventana · paso 1/2: opacidad y blur del fondo
+↑/↓ moverse · Enter elegir · Esc cancelar' --header-first)
+    [ -n "$op_pick" ] || { echo "Sin cambios."; return; }
+    local opacity blur
+    case "$op_pick" in
+        "$O_OP") opacity=1.0;  blur=0 ;;
+        "$O_SU") opacity=0.90; blur=16 ;;
+        "$O_MA") opacity=0.75; blur=32 ;;
+    esac
+
+    local P_CO='▫️ Compacto' P_NO='◻️ Normal (por defecto)' P_AM='⬜ Amplio'
+    local pad_pick
+    pad_pick=$(printf '%s\n%s\n%s\n' "$P_CO" "$P_NO" "$P_AM" | fzf \
+        --height=30% --layout=reverse --border=rounded \
+        --prompt='padding › ' \
+        --header='🪟 Ventana · paso 2/2: padding interno
+↑/↓ moverse · Enter elegir · Esc cancelar' --header-first)
+    [ -n "$pad_pick" ] || { echo "Sin cambios."; return; }
+    local padding
+    case "$pad_pick" in
+        "$P_CO") padding=2 ;;
+        "$P_NO") padding=4 ;;
+        "$P_AM") padding=8 ;;
+    esac
+
+    set_window "$opacity" "$blur" "$padding"
+}
+
+set_tabs() {  # $1=style $2=powerline_style $3=edge
+    {
+        printf 'tab_bar_style        %s\n' "$1"
+        printf 'tab_powerline_style  %s\n' "$2"
+        printf 'tab_bar_edge         %s\n' "$3"
+    } > "$TABS_ACTIVE"
+    echo "✅ Tabs actualizadas."
+    reload_kitty
+}
+
+pick_tabs() {
+    local Y_PC='Powerline · curvo (por defecto)'
+    local Y_PA='Powerline · angular'
+    local Y_FA='Fade (difuminado)'
+    local Y_SE='Separador simple'
+    local Y_OC='Oculta (sin barra de tabs)'
+    local style_pick
+    style_pick=$(printf '%s\n%s\n%s\n%s\n%s\n' "$Y_PC" "$Y_PA" "$Y_FA" "$Y_SE" "$Y_OC" | fzf \
+        --height=40% --layout=reverse --border=rounded \
+        --prompt='estilo › ' \
+        --header='📑 Tabs · paso 1/2: estilo de la barra
+↑/↓ moverse · Enter elegir · Esc cancelar' --header-first)
+    [ -n "$style_pick" ] || { echo "Sin cambios."; return; }
+    local style pstyle
+    case "$style_pick" in
+        "$Y_PC") style=powerline; pstyle=slanted ;;
+        "$Y_PA") style=powerline; pstyle=angled ;;
+        "$Y_FA") style=fade;      pstyle=slanted ;;
+        "$Y_SE") style=separator; pstyle=slanted ;;
+        "$Y_OC") style=hidden;    pstyle=slanted ;;
+    esac
+
+    local E_AR='⬆️ Arriba (por defecto)' E_AB='⬇️ Abajo'
+    local edge_pick
+    edge_pick=$(printf '%s\n%s\n' "$E_AR" "$E_AB" | fzf \
+        --height=25% --layout=reverse --border=rounded \
+        --prompt='posición › ' \
+        --header='📑 Tabs · paso 2/2: posición de la barra
+↑/↓ moverse · Enter elegir · Esc cancelar' --header-first)
+    [ -n "$edge_pick" ] || { echo "Sin cambios."; return; }
+    local edge
+    case "$edge_pick" in
+        "$E_AR") edge=top ;;
+        "$E_AB") edge=bottom ;;
+    esac
+
+    set_tabs "$style" "$pstyle" "$edge"
+}
+
+surprise_theme() {
+    local names arr name act
+    names=$(cd "$THEMES_DIR" && shopt -s nullglob && printf '%s\n' *.conf | sed 's/\.conf$//')
+    [ -n "$names" ] || { echo "No hay temas en $THEMES_DIR"; return; }
+    mapfile -t arr <<< "$names"
+    while :; do
+        name="${arr[$((RANDOM % ${#arr[@]}))]}"
+        _swatch "$name"
+        act=$(printf '✅ Aplicar este\n🎲 Tirar otro\n❌ Cancelar\n' | fzf \
+            --height=25% --layout=reverse --border=rounded \
+            --prompt='sorpréndeme › ' \
+            --header="🎲 $name
+↑/↓ moverse · Enter elegir · Esc = cancelar" --header-first)
+        case "$act" in
+            '✅ Aplicar este') set_fixed "$name"; return ;;
+            '🎲 Tirar otro') continue ;;
+            *) echo "Sin cambios."; return ;;
         esac
     done
 }
@@ -506,39 +684,33 @@ current_font="$(_font_of "$FONT_ACTIVE")"
 DYN='🎨 Color  · Dinámico   ·   DMS, sigue el wallpaper'
 FIX='🎨 Color  · Fijo       ·   elegir un tema de tu colección (con vista previa)'
 NEW='🖌️  Color  · Propio     ·   generá una paleta entera desde un color semilla'
+SUR='🎲 Sorpréndeme ·        tema al azar de tu colección'
 FNT='🔤 Fuente ·             elegir tipografía instalada en el sistema'
+CUR='🖱️  Cursor  ·            trail ninja, forma y parpadeo'
+WIN='🪟 Ventana ·            transparencia, blur y padding'
+TAB='📑 Tabs    ·            estilo y posición de la barra de tabs'
 
-mode=$(printf '%s\n%s\n%s\n%s\n' "$DYN" "$FIX" "$NEW" "$FNT" | fzf \
-    --height=45% --layout=reverse --border=rounded \
+mode=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "$DYN" "$FIX" "$NEW" "$SUR" "$FNT" "$CUR" "$WIN" "$TAB" | fzf \
+    --height=60% --layout=reverse --border=rounded \
     --prompt='modo › ' \
     --header="kitty   ·   color actual: $current_color   ·   fuente actual: $current_font
 ↑/↓ moverse · Enter elegir · Esc salir" \
     --header-first)
 
 case "$mode" in
-    "$DYN")
-        set_dynamic
-        ;;
+    "$DYN") set_dynamic ;;
     "$FIX")
         sel="$(pick_theme)"
-        if [ -n "$sel" ]; then
-            set_fixed "$sel"
-        else
-            echo "Sin cambios."
-        fi
+        if [ -n "$sel" ]; then set_fixed "$sel"; else echo "Sin cambios."; fi
         ;;
-    "$NEW")
-        create_custom_theme
-        ;;
+    "$NEW") create_custom_theme ;;
+    "$SUR") surprise_theme ;;
     "$FNT")
         sel="$(pick_font)"
-        if [ -n "$sel" ]; then
-            set_font "$sel"
-        else
-            echo "Sin cambios."
-        fi
+        if [ -n "$sel" ]; then set_font "$sel"; else echo "Sin cambios."; fi
         ;;
-    *)
-        echo "Sin cambios."
-        ;;
+    "$CUR") pick_cursor ;;
+    "$WIN") pick_window ;;
+    "$TAB") pick_tabs ;;
+    *) echo "Sin cambios." ;;
 esac
